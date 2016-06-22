@@ -1,6 +1,6 @@
 import { AsyncSubject } from 'rxjs/AsyncSubject'
 import { BehaviorSubject } from 'rxjs/BehaviorSubject'
-import { Subject } from 'rxjs/Subject'
+import { AnonymousSubject } from 'rxjs/Subject'
 import { Observable } from 'rxjs/Observable'
 import 'rxjs/add/observable/merge'
 import 'rxjs/add/operator/filter'
@@ -38,7 +38,7 @@ class ProtocolError extends Error {
 // protocol level things like serializing from/to JSON, routing
 // request_ids, looking at the `state` field to decide when an
 // observable is closed.
-class HorizonSocket extends Subject {
+class HorizonSocket {
   constructor(host, secure, path, handshaker) {
     const hostString = `ws${secure ? 's' : ''}:\/\/${host}\/${path}`
     const msgBuffer = []
@@ -59,7 +59,7 @@ class HorizonSocket extends Subject {
     // This is the observable part of the Subject. It forwards events
     // from the underlying websocket
     const socketObservable = Observable.create(subscriber => {
-      ws = new WebSocket(hostString, PROTOCOL_VERSION);
+      ws = new WebSocket(hostString, PROTOCOL_VERSION)
 
       ws.onerror = () => {
         // If the websocket experiences the error, we forward it through
@@ -169,11 +169,11 @@ class HorizonSocket extends Subject {
     // Subscriptions will be the observable containing all
     // queries/writes/changefeed requests. Specifically, the documents
     // that initiate them, each one with a different request_id
-    const subscriptions = new Subject()
+    const subscriptions = new AnonymousSubject()
     // Unsubscriptions is similar, only it holds only requests to
     // close a particular request_id on the server. Currently we only
     // need these for changefeeds.
-    const unsubscriptions = new Subject()
+    const unsubscriptions = new AnonymousSubject()
     const outgoing = Observable.merge(subscriptions, unsubscriptions)
     // How many requests are outstanding
     let activeRequests = 0
@@ -233,7 +233,8 @@ class HorizonSocket extends Subject {
                            resp.token !== undefined) {
                   try {
                     reqSubscriber.next(resp)
-                  } catch (e) { }
+                  } catch (e) {
+                  }
                 }
                 if (resp.state === 'synced') {
                   // Create a little dummy object for sync notifications
