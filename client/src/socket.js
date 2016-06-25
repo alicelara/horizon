@@ -1,6 +1,7 @@
 import { AsyncSubject } from 'rxjs/AsyncSubject'
 import { BehaviorSubject } from 'rxjs/BehaviorSubject'
-import { AnonymousSubject } from 'rxjs/Subject'
+import { Subject } from 'rxjs/Subject'
+import { WebSocketSubject } from 'rxjs/observable/dom/WebSocketSubject'
 import { Observable } from 'rxjs/Observable'
 import 'rxjs/add/observable/merge'
 import 'rxjs/add/operator/filter'
@@ -31,14 +32,113 @@ class ProtocolError extends Error {
   }
 }
 
+
+function handshakeSubject(options) {
+  return (next, fromServer) => {
+    const handshakeResult = new AsyncSubject()
+    fromServer.take(1).subscribe(handshakeResult)
+    toServer.next(options)
+    return handshakeResult
+  }
+}
+
 // Wraps native websockets with a Subject, which is both an Subscriber
-// and an Observable (it is bi-directional after all!). This
-// implementation is adapted from Rx.DOM.fromWebSocket and
-// RxSocketSubject by Ben Lesh, but it also deals with some simple
-// protocol level things like serializing from/to JSON, routing
-// request_ids, looking at the `state` field to decide when an
-// observable is closed.
-class HorizonSocket {
+// and an Observable (it is bi-directional after all!). This version
+// is based on the rxjs.observable.dom.WebSocketSubject implementation.
+class HorizonSocket extends AnonymousSubject {
+
+  // Deserializes a message from a string. Overrides the version
+  // implemented in WebSocketSubject
+  resultSelector(e) {
+    return deserialize(e)
+  }
+
+  // We're overriding the next defined in AnonymousSubject so we
+  // always serialize the value. When this is called a message will be
+  // sent over the socket to the server.
+  next(value) {
+    super.next(JSON.stringify(serialize(value)))
+  }
+
+  constructor({
+    url,            // Full url to connect to
+    socket,         // optionally provide a WebSocket to use
+    WebSocketCtor,  // optionally provide a WebSocket constructor to
+                    // instantiate
+    handshaker,     // function that returns handshake to emit
+    keepalive = 60, // seconds between keepalive messages
+  } = {}) {
+    super({
+      url,
+      protocol: PROTOCOL_VERSION,
+      socket,
+      WebSocketCtor,
+    })
+    // Completes or errors based on handshake success. Buffers
+    // handshake response for later subscribers (like a Promise)
+    this.handshakeSubject = new AsyncSubject()
+    this.handshaker = handshaker
+
+    // This is used to emit status changes that others can hook into.
+    this.status = new BehaviorSubject(STATUS_UNCONNECTED)
+    // Keep track of subscribers so we's can decide when to
+    // unsubscribe.
+    this.activeSubscribers = 0
+    this.requestCounter = 0
+    // Observable of keepalive requests to periodically send to the
+    // server
+    this.keepAlive = Observable
+      .timer(keepalive * 1000, keepalive * 1000)
+      .map(n => ({ type: 'keepalive', n }))
+    this.keepAliveSubscription = null
+  }
+
+  addSubscriber() {
+    this.activeSubscribers++
+    if (this.activeSubscribers === 1) {
+      // send handshake
+      // start keepalive
+    }
+  }
+
+  decrementSubscribers() {
+    this.activeSubscribers--
+    if (this.activeSubscribers === 0) {
+      // End keepalive
+      this.keepAliveSubscription.unsubscribe()
+      this.keepAliveSubscription = null
+      // close socket
+
+    }
+  }
+
+  multiplex(request) {
+    const request_id = this.requestCounter++
+    return new Observable(observer => {
+      self.next(request)
+
+      let subscription = this.subscribe(msg => {
+        try {
+          if (msg.request_id === request_id) {
+            observer.next(msg)
+          }
+        } catch (e) {
+          observer.error(e)
+        }
+      },
+      err => observer.error(err),
+      () => observer.complete())
+
+      return () => {
+        self.next({ request_id, type: 'end_subscription' })
+        subscription.unsubscribe()
+        this.decrementSubscribers()
+      }
+    })
+  }
+}
+
+export class HorizonSocket extends AnonymousSubject {
   constructor(host, secure, path, handshaker) {
     const hostString = `ws${secure ? 's' : ''}:\/\/${host}\/${path}`
     const msgBuffer = []
@@ -258,5 +358,3 @@ class HorizonSocket {
     })
   }
 }
-
-module.exports = HorizonSocket
